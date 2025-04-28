@@ -10,7 +10,7 @@ NC='\033[0m' # No Color
 CLUSTER_NAME="odoo"
 SERVICE_NAME="odoo"
 DATASYNC_TASK_ARN="arn:aws:datasync:us-east-1:021776651623:task/task-0d29d2cc314dbf6fa"
-S3_BUCKET="odoo-odoo-custom-121312"
+S3_BUCKET="odoo-odoo-custom-41123"
 CLOUDFRONT_DOMAIN="d290mq7kqg95wg.cloudfront.net"
 ODOO_DB="odoo"
 

@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 :: Configuration
-set "CLOUDFRONT_DOMAIN=d27lnhk6onbdt0.cloudfront.net"
+set "CLOUDFRONT_DOMAIN=d29nh85mra8e2h.cloudfront.net"
 set "ODOO_DB=odoo"
 set "SECRET_ID=odoo-root-user"
 

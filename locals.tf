@@ -38,7 +38,22 @@ locals {
   auth_header_alb = "CloudFront-Access"
 
   # Domain variables
-  custom_domain            = var.route53_hosted_zone != null
-  cloudfront_custom_domain = local.custom_domain ? var.odoo_domain != null ? var.odoo_domain : data.aws_route53_zone.domain[0].name : null
-  alb_custom_domain        = local.custom_domain ? var.odoo_domain != null ? "alb.${var.odoo_domain}" : "alb.${data.aws_route53_zone.domain[0].name}" : null
+  custom_domain = var.route53_hosted_zone != null
+
+  cloudfront_custom_domain = (
+    local.custom_domain
+    ? (length(var.odoo_domain) > 0
+      ? var.odoo_domain
+    : var.route53_hosted_zone)
+    : null
+  )
+
+  alb_custom_domain = (
+    local.custom_domain
+    ? (length(var.odoo_domain) > 0
+      ? "alb.${var.odoo_domain}"
+    : "alb.${var.route53_hosted_zone}")
+    : null
+  )
+
 }

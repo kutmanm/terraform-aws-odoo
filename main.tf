@@ -166,64 +166,41 @@ module "alb" {
     }
   ]
 
-  http_tcp_listeners = local.custom_domain ? [{
-    port        = 80
-    protocol    = "HTTP"
-    action_type = "redirect"
-
-    redirect = {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-      host        = local.cloudfront_custom_domain
+  target_groups = [
+    {
+      name             = var.name
+      backend_protocol = "HTTP"
+      backend_port     = local.odoo_port
+      target_type      = "instance"
+      health_check = {
+        enabled             = true
+        interval            = 30
+        path                = "/web/health"
+        port                = "traffic-port"
+        healthy_threshold   = 3
+        unhealthy_threshold = 3
+        timeout             = 6
+        protocol            = "HTTP"
+        matcher             = "200"
+      }
     }
-    }] : [{
-    port        = 80
-    protocol    = "HTTP"
-    action_type = "redirect"
+  ]
 
-    redirect = {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-      host        = module.cdn.cloudfront_distribution_domain_name
-    }
-  }]
-
-  http_tcp_listener_rules = local.custom_domain ? [] : [{
-    http_tcp_listener_index = 0
-    priority                = 10
-    tags                    = { Name = "IngressFromCloudFront" }
-
-    actions = [{
-      type               = "forward"
+  http_tcp_listeners = [
+    {
+      port        = 80
+      protocol    = "HTTP"
+      action_type = "forward"
       target_group_index = 0
-    }]
-
-    conditions = [
-      {
-        http_headers = [{
-          http_header_name = local.auth_header_alb
-          values           = [random_password.cloudfront_secret_for_alb.result]
-        }]
-      },
-      {
-        host_headers = [module.cdn.cloudfront_distribution_domain_name]
-      },
-    ]
-  }]
+    }
+  ]
 
   https_listeners = local.custom_domain ? [{
     port            = 443
+    protocol        = "HTTPS"
     certificate_arn = module.acm[0].acm_certificate_arn
-    action_type     = "redirect"
-
-    redirect = {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-      host        = local.cloudfront_custom_domain
-    }
+    action_type     = "forward"
+    target_group_index = 0
   }] : []
 
   https_listener_rules = local.custom_domain ? [{
@@ -248,18 +225,6 @@ module "alb" {
       },
     ]
   }] : []
-
-  target_groups = [{
-    name             = var.name
-    backend_protocol = "HTTP"
-    backend_port     = local.odoo_port
-    target_type      = "instance"
-
-    health_check = {
-      matcher = "200"
-      path    = "/web/health"
-    }
-  }]
 }
 
 
@@ -635,6 +600,7 @@ module "ecs_service" {
       environment = [
         # Root user
         { "name" : "ODOO_EMAIL", "value" : var.odoo_root_email },
+        { "name" : "ODOO_PROXY_MODE", "value" : "True" },
         # Python path
         { "name" : "PYTHONPATH", "value" : local.python_extra_packages },
         # DB parameters
@@ -688,16 +654,34 @@ module "ecs_service" {
 # in 'alb.subdomain.'.
 #
 ######################################################################################
-data "aws_route53_zone" "domain" {
-  count = local.custom_domain ? 1 : 0
 
-  zone_id = var.route53_hosted_zone
+provider "aws" {
+  region = "us-east-1"
 }
 
-resource "aws_route53_record" "cdn" {
-  count = local.custom_domain ? 1 : 0
+# Позволяет явно передать zone_id через tfvars, иначе ищем по имени
+variable "route53_hosted_zone_id" {
+  type        = string
+  default     = ""
+  description = "Приоритетный Zone ID; если пусто — поиск Hosted Zone по имени var.route53_hosted_zone."
+}
 
-  zone_id = var.route53_hosted_zone
+## Единственный data-блок — ищем Hosted Zone по имени (без trailing dot в var.route53_hosted_zone!)
+data "aws_route53_zone" "domain" {
+  name         = var.route53_hosted_zone
+  private_zone = false
+}
+
+# Локалка: если в tfvars задан route53_hosted_zone_id — он в приоритете, иначе идём по имени
+locals {
+  hosted_zone_id = var.route53_hosted_zone_id != "" ? var.route53_hosted_zone_id : data.aws_route53_zone.domain.zone_id
+}
+
+
+# DNS-запись для CloudFront CDN
+resource "aws_route53_record" "cdn" {
+  count   = local.custom_domain ? 1 : 0
+  zone_id = local.hosted_zone_id
   name    = local.cloudfront_custom_domain
   type    = "A"
 
@@ -708,10 +692,10 @@ resource "aws_route53_record" "cdn" {
   }
 }
 
+# DNS-запись для ALB
 resource "aws_route53_record" "alb" {
-  count = local.custom_domain ? 1 : 0
-
-  zone_id = var.route53_hosted_zone
+  count   = local.custom_domain ? 1 : 0
+  zone_id = local.hosted_zone_id
   name    = local.alb_custom_domain
   type    = "A"
 
@@ -722,17 +706,13 @@ resource "aws_route53_record" "alb" {
   }
 }
 
-
 ######################################################################################
 # ACM
 #
 # When a custom domain is set, an ACM cert for the domain and '*.' subdomain is
 # created and automatically validated.
-#
-# The cert is used for the ALB listeners and conditionally for the CDN (if the region
-# is us-east-1, if not a separate cert hosted in us-east-1 must be provided).
-#
 ######################################################################################
+
 module "acm" {
   source  = "terraform-aws-modules/acm/aws"
   version = "~> 4.0"
@@ -740,12 +720,11 @@ module "acm" {
   count = local.custom_domain ? 1 : 0
 
   domain_name               = local.cloudfront_custom_domain
-  zone_id                   = var.route53_hosted_zone
+  zone_id                   = local.hosted_zone_id
   tags                      = var.tags
   wait_for_validation       = true
   subject_alternative_names = ["*.${local.cloudfront_custom_domain}"]
 }
-
 
 ######################################################################################
 # SES
